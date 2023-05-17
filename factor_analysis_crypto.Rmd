@@ -1,0 +1,162 @@
+---
+title: "Factor_analysis_crypto"
+author: "Sofia_Kyba"
+date: "2023-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load needed libraries
+```{r}
+library(corrplot)
+library(magrittr)
+library(psych)
+library(factoextra)
+library(ggplot2)
+library(plotly)
+library(hrbrthemes)
+library(car)
+library(plm)
+library(panelr)
+library(tidyr)
+
+```
+
+### Read the data
+```{r}
+# portfolios of cryptocurrencies (weighted average) depending on each variable
+dataFactors <- read.csv("riskfactors_weekly_vw.csv")
+head(dataFactors)
+
+# data on each individual crypto currency
+dataCryptos <- read.csv("cryptos_weekly_social.csv")
+head(dataCryptos)
+```
+
+```{r}
+totalData <- merge(dataCryptos, dataFactors, by="date")
+head(totalData)
+```
+
+
+```{r}
+uniqueTickers <- unique(dataCryptos$ticker)
+uniqueTickers
+```
+
+*The variable we are interested in is logret (from dataCryptos dataset). It represents returns of each individual crypto currency at given time point.
+
+```{r}
+#removing rows with nan values in logret only
+dataCryptos1 <- na.omit(dataCryptos$logret)
+```
+
+
+```{r}
+# extract unnecessary columns
+dataFactors <- dataFactors[,!names(dataFactors) %in% c("date", "time", "transaction_count_all_time", "average_transaction_value", "new_addresses07_0", "new_addresses30_0", "active_addresses07_0", "active_addresses30_0", "volume07_0", "volume30_0", "turnover07_0", "turnover30_0")]
+head(dataFactors)
+```
+
+### Correlation matrix
+To see whether factor analysis is appropriate.
+
+```{r}
+corData <- cor(dataFactors)
+corDataFrame <- as.data.frame(round(corData, 2))
+corDataFrame
+```
+From the result we can see that there are variables that are highly correlated.
+
+```{r}
+for (i in 1:nrow(corData)){
+  correlations <-  which((corData[i,] > 0.65) & (corData[i,] != 1))
+  
+  if(length(correlations)> 0){
+    print(colnames(dataFactors)[i])
+    print(correlations)
+  }
+}
+```
+
+# EXPLANATORY FACTOR ANALYSIS
+
+The first step is to determine whether the data is suitable for factor analysis
+
+* The Kaiser–Meyer–Olkin (KMO) test is a statistical measure to determine how suited data is for factor analysis.The KMO represents the degree to which each observed variable is predicted by the other variables in the dataset and with this indicates the suitability for factor analysis.
+```{r}
+KMO(dataFactors)
+```
+
+I also perform Bartlett’s test for sphericity to see whether I have sufficient evidence to say that the groups have different variances.
+```{r}
+cortest.bartlett(dataFactors)
+```
+
+p-value is small therefore I can perform factor analysis.
+
+```{r}
+det(cor(dataFactors))
+```
+We have a positive determinant, which means the factor analysis will probably run.
+
+
+The next step will be determining the number of factors.
+
+```{r}
+scree(dataFactors, pc=FALSE)
+```
+Due to scree plot an optimal number of factors lies somewhere near between 6 and 11.
+
+```{r}
+fa.parallel(dataFactors, fa="fa")
+```
+The blue line shows eigenvalues of actual data and the two red lines (placed on top of each other) show simulated and resampled data. Here we look at the large drops in the actual data and spot the point where it levels off to the right. Also, we locate the point of inflection – the point where the gap between simulated data and actual data tends to be minimum.
+
+The parallel analysis is telling us that 6-10 factors may be best.
+
+```{r}
+Nfacs2 <- 6
+fit2 <- factanal(dataFactors, Nfacs2, rotation="promax", scores = "regression")
+
+print(fit2, digits=2, cutoff=0.3, sort=TRUE)
+```
+
+
+```{r}
+psych::alpha(f_1, check.keys=TRUE)$total[1]
+psych::alpha(f_2, check.keys=TRUE)$total[1]
+psych::alpha(f_3, check.keys=TRUE)$total[1]
+psych::alpha(f_4, check.keys=TRUE)$total[1]
+psych::alpha(f_5, check.keys=TRUE)$total[1]
+psych::alpha(f_6, check.keys=TRUE)$total[1]
+```
+
+
+factor 1 - volatility
+factor 2 - social media
+factor 3 - liquidity
+factor 4 - momentum
+factor 5 - coefvar
+factor 6 - downside risk
+
+
+```{r}
+#scaledCryptos = as.data.frame(scale(dataCryptos))
+#head(scaledCryptos)
+```
+
+We add market value factor and regress resulting factors on the returns.
+
+Final model:
+```{r}
+reg = plm(logret ~ mkt_vw + max30_0.y + reddit_subscribers.y + ahcc07_0.y + r30_0.y +
+          coefvar_vol07_0.y + es95_90_0.y, data = totalData, index = c("ticker","date"), model="pooling")
+summary(reg)
+```
+
+All the factors except for r30_0 (momentum) are significant ar 0.05.
+
